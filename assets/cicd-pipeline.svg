@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 120" width="100%" height="100%" style="background-color: #070a13; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <defs>
+    <filter id="glow-cyan" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#070a13"/>
+  <text x="500" y="20" fill="#64748b" font-size="12" font-weight="600" text-anchor="middle">Automated Jenkins CI/CD Pipeline</text>
+
+  <!-- STAGE 1 -->
+  <rect x="10" y="30" width="160" height="75" rx="6" fill="#0f172a" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="25" y="50" fill="#ef4444" font-size="9" font-weight="700">STAGE 1</text>
+  <text x="90" y="70" fill="#ffffff" font-size="11" font-weight="700" text-anchor="middle">Source Code</text>
+  <text x="90" y="88" fill="#94a3b8" font-size="9" text-anchor="middle">GitHub Webhook Push</text>
+
+  <!-- PATH C1 -->
+  <path id="c1" d="M 170 67 L 210 67" stroke="#1e293b" stroke-width="3"/>
+  <circle r="4" fill="#00f0ff" filter="url(#glow-cyan)">
+    <animateMotion dur="0.7s" repeatCount="indefinite"><mpath href="#c1"/></animateMotion>
+  </circle>
+
+  <!-- STAGE 2 -->
+  <rect x="210" y="30" width="160" height="75" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="225" y="50" fill="#38bdf8" font-size="9" font-weight="700">STAGE 2</text>
+  <text x="290" y="70" fill="#ffffff" font-size="11" font-weight="700" text-anchor="middle">Jenkins Build</text>
+  <text x="290" y="88" fill="#94a3b8" font-size="9" text-anchor="middle">Agent Execution</text>
+
+  <!-- PATH C2 -->
+  <path id="c2" d="M 370 67 L 410 67" stroke="#1e293b" stroke-width="3"/>
+  <circle r="4" fill="#00f0ff" filter="url(#glow-cyan)">
+    <animateMotion dur="0.7s" repeatCount="indefinite"><mpath href="#c2"/></animateMotion>
+  </circle>
+
+  <!-- STAGE 3 -->
+  <rect x="410" y="30" width="160" height="75" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+  <text x="425" y="50" fill="#10b981" font-size="9" font-weight="700">STAGE 3</text>
+  <text x="490" y="70" fill="#ffffff" font-size="11" font-weight="700" text-anchor="middle">Containerize</text>
+  <text x="490" y="88" fill="#94a3b8" font-size="9" text-anchor="middle">Docker Image Build</text>
+
+  <!-- PATH C3 -->
+  <path id="c3" d="M 570 67 L 610 67" stroke="#1e293b" stroke-width="3"/>
+  <circle r="4" fill="#00f0ff" filter="url(#glow-cyan)">
+    <animateMotion dur="0.7s" repeatCount="indefinite"><mpath href="#c3"/></animateMotion>
+  </circle>
+
+  <!-- STAGE 4 -->
+  <rect x="610" y="30" width="160" height="75" rx="6" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="625" y="50" fill="#f59e0b" font-size="9" font-weight="700">STAGE 4</text>
+  <text x="690" y="70" fill="#ffffff" font-size="11" font-weight="700" text-anchor="middle">Artifact Registry</text>
+  <text x="690" y="88" fill="#94a3b8" font-size="9" text-anchor="middle">Push to Amazon ECR</text>
+
+  <!-- PATH C4 -->
+  <path id="c4" d="M 770 67 L 810 67" stroke="#1e293b" stroke-width="3"/>
+  <circle r="4" fill="#00f0ff" filter="url(#glow-cyan)">
+    <animateMotion dur="0.7s" repeatCount="indefinite"><mpath href="#c4"/></animateMotion>
+  </circle>
+
+  <!-- STAGE 5 -->
+  <rect x="810" y="30" width="180" height="75" rx="6" fill="#0f172a" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="825" y="50" fill="#a855f7" font-size="9" font-weight="700">STAGE 5</text>
+  <text x="900" y="70" fill="#ffffff" font-size="11" font-weight="700" text-anchor="middle">ECS Deployment</text>
+  <text x="900" y="88" fill="#94a3b8" font-size="9" text-anchor="middle">Zero Downtime Release</text>
+</svg>
