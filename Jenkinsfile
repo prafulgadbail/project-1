@@ -1,22 +1,26 @@
 pipeline {
-    agent {
-        label 'build-agent'
-    }
+    agent any
 
     environment {
-        AWS_REGION = 'ap-south-1'
+        AWS_REGION = 'us-east-1'
         AWS_ACCOUNT_ID = '261945560801'
         ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         BACKEND_REPO = 'student-app/backend'
         FRONTEND_REPO = 'student-app/frontend'
         IMAGE_TAG = "${BUILD_NUMBER}"
-        CLUSTER_NAME = 'student-app-cluster'
+        CLUSTER_NAME = 'prod-cluster'
     }
 
     stages {
         
-
-
+        stage('mvn build') {
+            steps {
+                dir('order-service') {
+                    sh 'mvn clean package -DskipTests'
+                }
+            }
+        }
+        
         stage('ECR Login') {
             steps {
                 sh "aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY"
