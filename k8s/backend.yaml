@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: backend
   namespace: student-app
+  annotations:
+    reloader.stakater.com/auto: "true"
 
 spec:
   replicas: 2
@@ -53,6 +55,26 @@ spec:
                   name: mariadb-secret
                   key: DB_PASSWORD
 
+          # Check whether the application is ready to receive traffic
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Check whether the application is alive and should remain running
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+
           # Resource requests and limits for the backend container
           resources:
             requests:
@@ -64,7 +86,6 @@ spec:
               cpu: "500m"
 
 ---
-
 apiVersion: v1
 kind: Service
 metadata:

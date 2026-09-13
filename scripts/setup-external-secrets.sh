@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -euo pipefail
+set -Eeuo pipefail
 
 # ============================================================
 # CHANGE ONLY THESE VALUES
@@ -10,8 +10,13 @@ CLUSTER_NAME="prod-cluster"
 AWS_REGION="us-east-1"
 SECRET_NAME="prod/mariadb"
 
-IAM_POLICY_NAME="EKSExternalSecretsManagerPolicy"
-IAM_ROLE_NAME="EKSExternalSecretsManagerRole"
+# Cluster-specific IAM resources prevent projects/clusters
+# from overwriting each other's Secrets Manager permissions.
+IAM_POLICY_NAME="EKSExternalSecretsManagerPolicy-${CLUSTER_NAME}"
+IAM_ROLE_NAME="EKSExternalSecretsManagerRole-${CLUSTER_NAME}"
+
+ESO_NAMESPACE="external-secrets"
+ESO_SERVICE_ACCOUNT="external-secrets"
 
 # ============================================================
 # DO NOT CHANGE BELOW THIS LINE
@@ -38,7 +43,13 @@ done
 
 ACCOUNT_ID=$(aws sts get-caller-identity \
     --query 'Account' \
-    --output text)
+    --output text \
+    --no-cli-pager)
+
+if [[ -z "$ACCOUNT_ID" || "$ACCOUNT_ID" == "None" ]]; then
+    echo "ERROR: Unable to detect AWS Account ID."
+    exit 1
+fi
 
 POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${IAM_POLICY_NAME}"
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${IAM_ROLE_NAME}"
@@ -47,13 +58,15 @@ echo "AWS Account : $ACCOUNT_ID"
 echo "Cluster     : $CLUSTER_NAME"
 echo "Region      : $AWS_REGION"
 echo "Secret      : $SECRET_NAME"
+echo "IAM Policy  : $IAM_POLICY_NAME"
+echo "IAM Role    : $IAM_ROLE_NAME"
 
 # ------------------------------------------------------------
 # Configure kubectl for the selected EKS cluster
 # ------------------------------------------------------------
 
 echo ""
-echo "[1/7] Updating kubeconfig..."
+echo "[1/8] Updating kubeconfig..."
 
 aws eks update-kubeconfig \
     --region "$AWS_REGION" \
@@ -69,7 +82,7 @@ echo "EKS connection OK."
 # ------------------------------------------------------------
 
 echo ""
-echo "[2/7] Checking Secrets Manager secret..."
+echo "[2/8] Checking Secrets Manager secret..."
 
 SECRET_ARN=$(aws secretsmanager describe-secret \
     --region "$AWS_REGION" \
@@ -78,42 +91,80 @@ SECRET_ARN=$(aws secretsmanager describe-secret \
     --output text \
     --no-cli-pager)
 
+if [[ -z "$SECRET_ARN" || "$SECRET_ARN" == "None" ]]; then
+    echo "ERROR: Secrets Manager secret not found: $SECRET_NAME"
+    exit 1
+fi
+
 echo "Secret ARN: $SECRET_ARN"
 
 # ------------------------------------------------------------
-# Create IAM policy only if it does not exist
+# Create or update IAM policy
+# Access is restricted to the required secret only.
 # ------------------------------------------------------------
 
 echo ""
-echo "[3/7] Checking IAM Policy..."
+echo "[3/8] Creating or updating IAM Policy..."
 
-if aws iam get-policy \
-    --policy-arn "$POLICY_ARN" \
-    --no-cli-pager >/dev/null 2>&1; then
-
-    echo "IAM Policy already exists. Skipping."
-
-else
-
-    echo "Creating IAM Policy..."
-
-    POLICY_DOCUMENT=$(cat <<EOF
+POLICY_DOCUMENT=$(cat <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadSecretsManagerSecret",
+      "Sid": "ReadRequiredSecret",
       "Effect": "Allow",
       "Action": [
         "secretsmanager:GetSecretValue",
         "secretsmanager:DescribeSecret"
       ],
-      "Resource": "$SECRET_ARN"
+      "Resource": "${SECRET_ARN}"
     }
   ]
 }
 EOF
 )
+
+if aws iam get-policy \
+    --policy-arn "$POLICY_ARN" \
+    --no-cli-pager >/dev/null 2>&1; then
+
+    echo "IAM Policy exists."
+
+    # AWS IAM allows a maximum of 5 policy versions.
+    # Remove the oldest non-default version when required.
+    NON_DEFAULT_COUNT=$(aws iam list-policy-versions \
+        --policy-arn "$POLICY_ARN" \
+        --query 'length(Versions[?IsDefaultVersion==`false`])' \
+        --output text \
+        --no-cli-pager)
+
+    if [[ "$NON_DEFAULT_COUNT" -ge 4 ]]; then
+
+        OLDEST_VERSION=$(aws iam list-policy-versions \
+            --policy-arn "$POLICY_ARN" \
+            --query 'sort_by(Versions[?IsDefaultVersion==`false`], &CreateDate)[0].VersionId' \
+            --output text \
+            --no-cli-pager)
+
+        echo "Deleting oldest policy version: $OLDEST_VERSION"
+
+        aws iam delete-policy-version \
+            --policy-arn "$POLICY_ARN" \
+            --version-id "$OLDEST_VERSION" \
+            --no-cli-pager
+    fi
+
+    aws iam create-policy-version \
+        --policy-arn "$POLICY_ARN" \
+        --policy-document "$POLICY_DOCUMENT" \
+        --set-as-default \
+        --no-cli-pager >/dev/null
+
+    echo "IAM Policy updated."
+
+else
+
+    echo "IAM Policy not found. Creating..."
 
     aws iam create-policy \
         --policy-name "$IAM_POLICY_NAME" \
@@ -121,7 +172,6 @@ EOF
         --no-cli-pager >/dev/null
 
     echo "IAM Policy created."
-
 fi
 
 # ------------------------------------------------------------
@@ -129,7 +179,7 @@ fi
 # ------------------------------------------------------------
 
 echo ""
-echo "[4/7] Checking EKS Pod Identity Agent..."
+echo "[4/8] Checking EKS Pod Identity Agent..."
 
 if aws eks describe-addon \
     --cluster-name "$CLUSTER_NAME" \
@@ -148,14 +198,7 @@ else
         --addon-name eks-pod-identity-agent \
         --region "$AWS_REGION" \
         --no-cli-pager >/dev/null
-
-    echo "Pod Identity Agent installation started."
-
 fi
-
-# ------------------------------------------------------------
-# Wait for Pod Identity Agent
-# ------------------------------------------------------------
 
 aws eks wait addon-active \
     --cluster-name "$CLUSTER_NAME" \
@@ -165,17 +208,17 @@ aws eks wait addon-active \
 echo "Pod Identity Agent is ACTIVE."
 
 # ------------------------------------------------------------
-# Create IAM Role only if it does not exist
+# Create IAM Role for External Secrets Operator
 # ------------------------------------------------------------
 
 echo ""
-echo "[5/7] Checking IAM Role..."
+echo "[5/8] Checking IAM Role..."
 
 if aws iam get-role \
     --role-name "$IAM_ROLE_NAME" \
     --no-cli-pager >/dev/null 2>&1; then
 
-    echo "IAM Role already exists. Skipping."
+    echo "IAM Role already exists."
 
 else
 
@@ -204,69 +247,48 @@ else
         --no-cli-pager >/dev/null
 
     echo "IAM Role created."
-
 fi
 
 # ------------------------------------------------------------
-# Attach policy only if it is not already attached
+# Attach IAM Policy to the role
 # ------------------------------------------------------------
+
+echo ""
+echo "[6/8] Ensuring IAM Policy is attached..."
 
 if aws iam list-attached-role-policies \
     --role-name "$IAM_ROLE_NAME" \
     --query "AttachedPolicies[?PolicyArn=='$POLICY_ARN'].PolicyArn" \
     --output text \
-    --no-cli-pager | grep -q "$POLICY_ARN"; then
+    --no-cli-pager | grep -Fq "$POLICY_ARN"; then
 
     echo "IAM Policy already attached."
 
 else
 
-    echo "Attaching IAM Policy..."
-
     aws iam attach-role-policy \
         --role-name "$IAM_ROLE_NAME" \
-        --policy-arn "$POLICY_ARN"
+        --policy-arn "$POLICY_ARN" \
+        --no-cli-pager
 
     echo "IAM Policy attached."
-
 fi
 
 # ------------------------------------------------------------
-# Install or verify External Secrets Operator
+# Create Pod Identity association BEFORE ESO installation
 # ------------------------------------------------------------
 
 echo ""
-echo "[6/7] Checking External Secrets Operator..."
-
-helm repo add external-secrets \
-    https://charts.external-secrets.io >/dev/null 2>&1 || true
-
-helm repo update >/dev/null 2>&1
-
-helm upgrade --install external-secrets \
-    external-secrets/external-secrets \
-    --namespace external-secrets \
-    --create-namespace \
-    --wait \
-    --timeout 5m
-
-echo "External Secrets Operator is READY."
-
-# ------------------------------------------------------------
-# Create Pod Identity association only if it does not exist
-# ------------------------------------------------------------
-
-echo ""
-echo "[7/7] Checking Pod Identity association..."
+echo "[7/8] Checking Pod Identity association..."
 
 ASSOCIATION_ID=$(aws eks list-pod-identity-associations \
     --cluster-name "$CLUSTER_NAME" \
     --region "$AWS_REGION" \
-    --query "associations[?namespace=='external-secrets' && serviceAccount=='external-secrets'].associationId | [0]" \
+    --query "associations[?namespace=='${ESO_NAMESPACE}' && serviceAccount=='${ESO_SERVICE_ACCOUNT}'].associationId | [0]" \
     --output text \
     --no-cli-pager)
 
-if [ -n "$ASSOCIATION_ID" ] && [ "$ASSOCIATION_ID" != "None" ]; then
+if [[ -n "$ASSOCIATION_ID" && "$ASSOCIATION_ID" != "None" ]]; then
 
     echo "Pod Identity association already exists."
     echo "Association ID: $ASSOCIATION_ID"
@@ -279,29 +301,57 @@ else
         --cluster-name "$CLUSTER_NAME" \
         --region "$AWS_REGION" \
         --role-arn "$ROLE_ARN" \
-        --namespace external-secrets \
-        --service-account external-secrets \
-        --no-cli-pager
+        --namespace "$ESO_NAMESPACE" \
+        --service-account "$ESO_SERVICE_ACCOUNT" \
+        --no-cli-pager >/dev/null
 
     echo "Pod Identity association created."
-
 fi
 
 # ------------------------------------------------------------
-# Final verification
+# Install or upgrade External Secrets Operator
 # ------------------------------------------------------------
 
 echo ""
-echo "============================================================"
-echo " SETUP COMPLETED SUCCESSFULLY"
-echo "============================================================"
+echo "[8/8] Installing or upgrading External Secrets Operator..."
 
-kubectl get pods -n external-secrets
+helm repo add external-secrets \
+    https://charts.external-secrets.io \
+    >/dev/null 2>&1 || true
+
+helm repo update >/dev/null 2>&1
+
+helm upgrade --install external-secrets \
+    external-secrets/external-secrets \
+    --namespace "$ESO_NAMESPACE" \
+    --create-namespace \
+    --wait \
+    --timeout 5m
+
+echo "External Secrets Operator installed/upgraded."
+
+# ------------------------------------------------------------
+# Verify ESO controller
+# ------------------------------------------------------------
+
+kubectl rollout status deployment/external-secrets \
+    -n "$ESO_NAMESPACE" \
+    --timeout=180s
 
 echo ""
-echo "IAM Policy : $POLICY_ARN"
-echo "IAM Role   : $ROLE_ARN"
-echo "Secret     : $SECRET_NAME"
+echo "ESO resources:"
+kubectl get deployment -n "$ESO_NAMESPACE"
 
 echo ""
-echo "Next: SecretStore + ExternalSecret manifests."
+echo "============================================================"
+echo " EXTERNAL SECRETS OPERATOR SETUP COMPLETED"
+echo "============================================================"
+
+echo ""
+echo "Cluster : $CLUSTER_NAME"
+echo "Region  : $AWS_REGION"
+echo "Secret  : $SECRET_NAME"
+echo "Role    : $IAM_ROLE_NAME"
+echo "Policy  : $IAM_POLICY_NAME"
+echo ""
+echo "SUCCESS: External Secrets Operator is ready."
