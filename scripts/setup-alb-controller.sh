@@ -39,6 +39,7 @@ echo
 # ------------------------------------------------------------
 # CHECK REQUIRED COMMANDS
 # ------------------------------------------------------------
+
 for cmd in aws eksctl kubectl helm curl jq timeout; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "ERROR: $cmd is not installed."
@@ -49,6 +50,7 @@ done
 # ------------------------------------------------------------
 # AWS ACCOUNT
 # ------------------------------------------------------------
+
 ACCOUNT_ID=$(aws sts get-caller-identity \
     --query Account \
     --output text \
@@ -67,6 +69,7 @@ ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
 # ------------------------------------------------------------
 # CHECK EKS CLUSTER
 # ------------------------------------------------------------
+
 echo
 echo "==> Checking EKS cluster..."
 
@@ -88,8 +91,8 @@ echo "EKS cluster is ACTIVE."
 # ------------------------------------------------------------
 # GET VPC ID FROM EKS CLUSTER
 # This avoids depending on EC2 Instance Metadata (IMDS).
-# VPC ID is detected dynamically - nothing is hardcoded.
 # ------------------------------------------------------------
+
 echo
 echo "==> Detecting VPC ID from EKS cluster..."
 
@@ -108,8 +111,9 @@ fi
 echo "VPC ID   : $VPC_ID"
 
 # ------------------------------------------------------------
-# KUBECONFIG
+# UPDATE KUBECONFIG
 # ------------------------------------------------------------
+
 echo
 echo "==> Updating kubeconfig..."
 
@@ -120,6 +124,7 @@ aws eks update-kubeconfig \
 # ------------------------------------------------------------
 # OIDC
 # ------------------------------------------------------------
+
 echo
 echo "==> Checking OIDC provider..."
 
@@ -156,7 +161,10 @@ fi
 
 # ------------------------------------------------------------
 # IAM POLICY
+# Download the required policy document and create the policy
+# only when the account does not already have it.
 # ------------------------------------------------------------
+
 echo
 echo "==> Checking IAM Policy..."
 
@@ -182,7 +190,9 @@ fi
 
 # ------------------------------------------------------------
 # IAM ROLE
+# Create the role only when it does not already exist.
 # ------------------------------------------------------------
+
 echo
 echo "==> Checking IAM Role..."
 
@@ -245,9 +255,12 @@ JSON
 fi
 
 # ------------------------------------------------------------
-# UPDATE TRUST POLICY
-# Ensures the current EKS cluster can assume the IAM role.
+# UPDATE TRUST POLICY SAFELY
+#
+# Preserve existing trust relationships.
+# Replace only the exact current cluster/service-account entry.
 # ------------------------------------------------------------
+
 echo
 echo "==> Ensuring current cluster is trusted by IAM Role..."
 
@@ -265,13 +278,21 @@ jq \
     .Version = "2012-10-17"
     |
     .Statement = (
-        [
-            .Statement[]
-            |
-            select(
-                .Principal.Federated? != $oidc
+        .Statement // []
+        |
+        map(
+            if (
+                .Principal.Federated? == $oidc
+                and
+                (
+                    .Condition.StringEquals?[$provider + ":sub"]?
+                    == ("system:serviceaccount:" + $namespace + ":" + $serviceaccount)
+                )
             )
-        ]
+            then empty
+            else .
+            end
+        )
         +
         [
             {
@@ -298,23 +319,40 @@ aws iam update-assume-role-policy \
     --no-cli-pager
 
 echo "Trust policy ready for current cluster."
+echo "Existing trust relationships were preserved."
 
 # ------------------------------------------------------------
-# ATTACH POLICY
+# ATTACH IAM POLICY
+# Attach only when the policy is not already attached.
 # ------------------------------------------------------------
+
 echo
 echo "==> Ensuring IAM Policy is attached..."
 
-aws iam attach-role-policy \
+if aws iam list-attached-role-policies \
     --role-name "$ROLE_NAME" \
-    --policy-arn "$POLICY_ARN" \
-    --no-cli-pager
+    --query "AttachedPolicies[?PolicyArn=='$POLICY_ARN'].PolicyArn" \
+    --output text \
+    --no-cli-pager | grep -Fq "$POLICY_ARN"; then
 
-echo "IAM Policy attached."
+    echo "IAM Policy already attached."
+
+else
+
+    aws iam attach-role-policy \
+        --role-name "$ROLE_NAME" \
+        --policy-arn "$POLICY_ARN" \
+        --no-cli-pager
+
+    echo "IAM Policy attached."
+fi
 
 # ------------------------------------------------------------
-# SERVICE ACCOUNT
+# KUBERNETES SERVICE ACCOUNT
+# Create the ServiceAccount if missing and annotate it
+# with the IAM role used by the Load Balancer Controller.
 # ------------------------------------------------------------
+
 echo
 echo "==> Creating/updating Kubernetes ServiceAccount..."
 
@@ -335,6 +373,7 @@ echo "ServiceAccount ready."
 # ------------------------------------------------------------
 # HELM REPOSITORY
 # ------------------------------------------------------------
+
 echo
 echo "==> Updating Helm repository..."
 
@@ -343,8 +382,11 @@ helm repo update eks
 
 # ------------------------------------------------------------
 # HELM INSTALL / UPGRADE
-# Explicit VPC ID prevents controller from depending on EC2 IMDS.
+#
+# Explicit VPC ID prevents controller from depending on IMDS.
+# Existing installation is upgraded instead of recreated.
 # ------------------------------------------------------------
+
 echo
 echo "==> Installing/upgrading AWS Load Balancer Controller..."
 
@@ -361,8 +403,9 @@ helm upgrade --install aws-load-balancer-controller \
     --timeout 5m
 
 # ------------------------------------------------------------
-# VERIFY
+# VERIFY DEPLOYMENT
 # ------------------------------------------------------------
+
 echo
 echo "==> Verifying deployment..."
 

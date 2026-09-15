@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: backend
   namespace: student-app
+
+  # Reloader restarts pods automatically when the Secret changes
   annotations:
     reloader.stakater.com/auto: "true"
 
@@ -29,8 +31,8 @@ spec:
       containers:
         - name: backend
 
-          # Backend application image
-          image: 261945560801.dkr.ecr.us-east-1.amazonaws.com/student-app/backend:v3
+          # Jenkins updates this image during deployment
+          image: backend
 
           ports:
             - containerPort: 8080
@@ -65,7 +67,7 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
 
-          # Check whether the application is alive and should remain running
+          # Check whether the application is alive
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
@@ -80,7 +82,6 @@ spec:
             requests:
               memory: "256Mi"
               cpu: "250m"
-
             limits:
               memory: "512Mi"
               cpu: "500m"
@@ -93,6 +94,8 @@ metadata:
   namespace: student-app
 
 spec:
+  type: ClusterIP
+
   selector:
     app: backend
 
